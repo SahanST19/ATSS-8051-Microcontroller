@@ -1,0 +1,254 @@
+A51 MACRO ASSEMBLER  ASTT                                                                 10/22/2026 15:38:40 PAGE     1
+
+
+MACRO ASSEMBLER A51 V8.2.7.0
+OBJECT MODULE PLACED IN .\Objects\astt.obj
+ASSEMBLER INVOKED BY: C:\Keil_v5\C51\BIN\A51.EXE astt.ASM SET(SMALL) DEBUG PRINT(.\Listings\astt.lst) OBJECT(.\Objects\a
+                      stt.obj) EP
+
+LOC  OBJ            LINE     SOURCE
+
+0000                   1     ORG 0000H
+0000 020030            2             LJMP MAIN
+                       3     
+                       4             ; External Interrupt 0 (STOP Button / Emergency)
+0003                   5             ORG 0003H
+0003 0200C2            6             LJMP EMERGENCY_ISR
+                       7     
+0030                   8             ORG 0030H
+0030                   9     MAIN:
+                      10             ; Initialize System Ports
+0030 758000           11             MOV P0, #00H            ; Turn off all motors initially
+0033 7590FF           12             MOV P1, #0FFH           ; Configure P1 as input (Keypad & Sensors)
+0036 75A000           13             MOV P2, #00H            ; Turn off Actuators and Indicators
+0039 75B0FF           14             MOV P3, #0FFH           ; Configure P3 as input (Buttons/Interrupts)
+                      15     
+                      16             ; Configure Interrupts
+003C D288             17             SETB IT0                ; Set INT0 as falling-edge triggered
+003E D2A8             18             SETB EX0                ; Enable External Interrupt 0
+0040 D2AF             19             SETB EA                 ; Enable Global Interrupts
+                      20     
+                      21             ; Configure Timers (Timer 0 for Ultrasonic, Timer 1 for PWM/Delay)
+0042 758911           22             MOV TMOD, #11H          ; Timer 0 and Timer 1 in 16-bit mode
+                      23     
+0045                  24     SYSTEM_IDLE:
+0045 D2A5             25             SETB P2.5               ; Turn ON Green Light (System Ready)
+0047 D2A6             26             SETB P2.6               ; Ensure Red Light/Alarm is OFF (Active-Low)
+                      27             
+0049                  28     WAIT_START:
+0049 20B6FD           29             JB P3.6, WAIT_START     ; Wait until ON button (P3.6) is pressed
+                      30     
+                      31             ; Phase 1: User Input (Keypad Scanning)
+004C                  32     READ_KEYPAD:
+004C 7590FF           33             MOV P1, #0FFH           ; Configure P1 as input
+004F C290             34             CLR P1.0                ; Ground keypad rows 0-3
+0051 C291             35             CLR P1.1
+0053 C292             36             CLR P1.2
+0055 C293             37             CLR P1.3
+                      38             
+0057 E590             39             MOV A, P1
+0059 5470             40             ANL A, #070H            ; Mask keypad columns (P1.4, P1.5, P1.6)
+005B B47002           41             CJNE A, #070H, KEY_PRESS ; If a key is pressed, proceed
+005E 80EC             42             SJMP READ_KEYPAD        ; Otherwise, keep waiting here endlessly
+                      43             
+0060                  44     KEY_PRESS:
+0060 3103             45             ACALL DEBOUNCE_DELAY
+0062 E590             46             MOV A, P1
+0064 5470             47             ANL A, #070H
+0066 B47002           48             CJNE A, #070H, STORE_KEY ; Confirm key press
+0069 80E1             49             SJMP READ_KEYPAD
+                      50     
+006B                  51     STORE_KEY:
+006B 7D01             52             MOV R5, #01H            ; Store target location ID
+006D 020070           53             LJMP MOVE_GANTRY        ; Proceed to gantry movement after valid key
+                      54     
+                      55             ; Phase 2: Gantry Positioning (X and Y Axis)
+0070                  56     MOVE_GANTRY:
+0070                  57     Y_STEP_LOOP:
+A51 MACRO ASSEMBLER  ASTT                                                                 10/22/2026 15:38:40 PAGE     2
+
+0070 758091           58             MOV P0, #91H            ; DC Motor ON, Stepper 1001
+0073 11F5             59             ACALL MOTOR_DELAY
+0075 20971A           60             JB P1.7, STOP_GANTRY    ; Check Y-Row 1 Limit Switch
+                      61     
+0078 7580C1           62             MOV P0, #0C1H           ; DC Motor ON, Stepper 1100
+007B 11F5             63             ACALL MOTOR_DELAY
+007D 209712           64             JB P1.7, STOP_GANTRY
+                      65     
+0080 758061           66             MOV P0, #61H            ; DC Motor ON, Stepper 0110
+0083 11F5             67             ACALL MOTOR_DELAY
+0085 20970A           68             JB P1.7, STOP_GANTRY
+                      69     
+0088 758031           70             MOV P0, #31H            ; DC Motor ON, Stepper 0011
+008B 11F5             71             ACALL MOTOR_DELAY
+008D 209702           72             JB P1.7, STOP_GANTRY
+                      73     
+0090 80DE             74             SJMP Y_STEP_LOOP        ; Continue stepping until limit switch is hit
+                      75     
+0092                  76     STOP_GANTRY:
+0092 758000           77             MOV P0, #00H            ; Stop all motors
+                      78     
+                      79             ; Phase 3: Vertical Movement & Gripping
+0095                  80     MEASURE_STACK:
+0095 D2B5             81             SETB P3.5               ; Trigger Ultrasonic Sensor
+0097 3108             82             ACALL MICRO_DELAY
+0099 C2B5             83             CLR P3.5
+009B                  84     WAIT_ECHO:
+009B 30B4FD           85             JNB P3.4, WAIT_ECHO     ; Wait for Echo pulse
+009E D28C             86             SETB TR0                ; Start Timer 0
+00A0                  87     WAIT_ECHO_END:
+00A0 20B4FD           88             JB P3.4, WAIT_ECHO_END
+00A3 C28C             89             CLR TR0                 ; Stop Timer 0
+                      90     
+00A5                  91     LOWER_Z:
+00A5 75A009           92             MOV P2, #09H            ; Step Mz Motor Downwards
+00A8 11F5             93             ACALL MOTOR_DELAY
+                      94     
+00AA D2A4             95             SETB P2.4               ; Turn ON Pneumatic Gripper (Relay)
+00AC 11FE             96             ACALL GRIP_DELAY        ; Wait for pressure to build
+                      97     
+00AE                  98     RAISE_Z:
+                      99             ; Step Mz Motor Upwards to safe height
+                     100     
+                     101             ; Phase 4: Delivery (Conveyor Belt)
+00AE                 102     DELIVER_TIRE:
+00AE C2A4            103             CLR P2.4                ; Turn OFF Gripper (Release Tire)
+                     104     
+00B0                 105     CONVEYOR_RUN:
+00B0 D282            106             SETB P0.2               ; Mc Motor ON (Forward)
+00B2 C283            107             CLR P0.3
+00B4 11F0            108             ACALL PWM_HALF_DELAY    ; Delay for ON time
+00B6 C282            109             CLR P0.2                ; Mc Motor OFF
+00B8 11F0            110             ACALL PWM_HALF_DELAY    ; Delay for OFF time (50% Duty Cycle)
+                     111             
+00BA 30A7F3          112             JNB P2.7, CONVEYOR_RUN  ; Continue running if Conveyor IR (P2.7) is 0
+                     113             
+00BD C282            114             CLR P0.2                ; Stop motor when IR sensor is triggered
+00BF 020045          115             LJMP SYSTEM_IDLE        ; Return to Idle State
+                     116     
+                     117     
+                     118     ; EMERGENCY INTERRUPT SERVICE ROUTINE (INT0)
+00C2                 119     EMERGENCY_ISR:
+00C2 C2AF            120             CLR EA                  ; Disable further interrupts
+00C4 758000          121             MOV P0, #00H            ; Immediate stop to all motors
+                     122             
+00C7 C2A5            123             CLR P2.5                ; Turn OFF Green Light
+A51 MACRO ASSEMBLER  ASTT                                                                 10/22/2026 15:38:40 PAGE     3
+
+00C9 C2A6            124             CLR P2.6                ; Turn ON Red Light and Buzzer (Active-Low)
+                     125             
+00CB                 126     EMERGENCY_WAIT:
+00CB 20B7FD          127             JB P3.7, EMERGENCY_WAIT ; Wait until Manual button (P3.7) is pressed
+                     128             
+00CE D2A6            129             SETB P2.6               ; Turn OFF Red Light and Buzzer
+00D0 758000          130             MOV P0, #00H            ; Ensure all motors remain OFF
+                     131             
+00D3 D2AF            132             SETB EA                 ; Re-enable interrupts
+00D5 020030          133             LJMP MAIN               ; Reset system completely back to MAIN
+                     134     
+                     135     
+                     136     ; SUBROUTINES
+00D8                 137     STEP_SEQ:
+00D8 090C0603        138             DB 09H, 0CH, 06H, 03H   ; Full-step sequence for Stepper Motors
+                     139     
+00DC                 140     DELAY_1S:
+00DC 7B0E            141             MOV R3, #14             ; Loop counter for ~1s using Timer 1
+00DE                 142     D1S_LOOP:
+00DE 758D00          143             MOV TH1, #00H           ; Load Timer 1
+00E1 758B00          144             MOV TL1, #00H
+00E4 D28E            145             SETB TR1
+00E6                 146     WAIT_T1:
+00E6 308FFD          147             JNB TF1, WAIT_T1
+00E9 C28E            148             CLR TR1
+00EB C28F            149             CLR TF1
+00ED DBEF            150             DJNZ R3, D1S_LOOP
+00EF 22              151             RET
+                     152     
+00F0                 153     PWM_HALF_DELAY:
+00F0 7C32            154             MOV R4, #50             ; Delay for 50% PWM Duty Cycle
+00F2 DCFE            155     PWM_L:  DJNZ R4, PWM_L
+00F4 22              156             RET
+                     157     
+00F5                 158     MOTOR_DELAY:
+00F5 7C0F            159             MOV R4, #15
+00F7 7DFF            160     MD_L2:  MOV R5, #0FFH
+00F9 DDFE            161     MD_L1:  DJNZ R5, MD_L1
+00FB DCFA            162             DJNZ R4, MD_L2
+00FD 22              163             RET
+                     164     
+00FE                 165     GRIP_DELAY:
+00FE 7EFF            166             MOV R6, #0FFH
+0100 DEFE            167     GD_L:   DJNZ R6, GD_L
+0102 22              168             RET
+                     169     
+0103                 170     DEBOUNCE_DELAY:
+0103 7FFF            171             MOV R7, #0FFH
+0105 DFFE            172     DB_L:   DJNZ R7, DB_L
+0107 22              173             RET
+                     174             
+0108                 175     MICRO_DELAY:
+0108 7A0A            176             MOV R2, #0AH
+010A DAFE            177     M_DEL:  DJNZ R2, M_DEL
+010C 22              178             RET
+                     179             
+                     180             END
+A51 MACRO ASSEMBLER  ASTT                                                                 10/22/2026 15:38:40 PAGE     4
+
+SYMBOL TABLE LISTING
+------ ----- -------
+
+
+N A M E             T Y P E  V A L U E   ATTRIBUTES
+
+CONVEYOR_RUN . . .  C ADDR   00B0H   A   
+D1S_LOOP . . . . .  C ADDR   00DEH   A   
+DB_L . . . . . . .  C ADDR   0105H   A   
+DEBOUNCE_DELAY . .  C ADDR   0103H   A   
+DELAY_1S . . . . .  C ADDR   00DCH   A   
+DELIVER_TIRE . . .  C ADDR   00AEH   A   
+EA . . . . . . . .  B ADDR   00A8H.7 A   
+EMERGENCY_ISR. . .  C ADDR   00C2H   A   
+EMERGENCY_WAIT . .  C ADDR   00CBH   A   
+EX0. . . . . . . .  B ADDR   00A8H.0 A   
+GD_L . . . . . . .  C ADDR   0100H   A   
+GRIP_DELAY . . . .  C ADDR   00FEH   A   
+IT0. . . . . . . .  B ADDR   0088H.0 A   
+KEY_PRESS. . . . .  C ADDR   0060H   A   
+LOWER_Z. . . . . .  C ADDR   00A5H   A   
+MAIN . . . . . . .  C ADDR   0030H   A   
+MD_L1. . . . . . .  C ADDR   00F9H   A   
+MD_L2. . . . . . .  C ADDR   00F7H   A   
+MEASURE_STACK. . .  C ADDR   0095H   A   
+MICRO_DELAY. . . .  C ADDR   0108H   A   
+MOTOR_DELAY. . . .  C ADDR   00F5H   A   
+MOVE_GANTRY. . . .  C ADDR   0070H   A   
+M_DEL. . . . . . .  C ADDR   010AH   A   
+P0 . . . . . . . .  D ADDR   0080H   A   
+P1 . . . . . . . .  D ADDR   0090H   A   
+P2 . . . . . . . .  D ADDR   00A0H   A   
+P3 . . . . . . . .  D ADDR   00B0H   A   
+PWM_HALF_DELAY . .  C ADDR   00F0H   A   
+PWM_L. . . . . . .  C ADDR   00F2H   A   
+RAISE_Z. . . . . .  C ADDR   00AEH   A   
+READ_KEYPAD. . . .  C ADDR   004CH   A   
+STEP_SEQ . . . . .  C ADDR   00D8H   A   
+STOP_GANTRY. . . .  C ADDR   0092H   A   
+STORE_KEY. . . . .  C ADDR   006BH   A   
+SYSTEM_IDLE. . . .  C ADDR   0045H   A   
+TF1. . . . . . . .  B ADDR   0088H.7 A   
+TH1. . . . . . . .  D ADDR   008DH   A   
+TL1. . . . . . . .  D ADDR   008BH   A   
+TMOD . . . . . . .  D ADDR   0089H   A   
+TR0. . . . . . . .  B ADDR   0088H.4 A   
+TR1. . . . . . . .  B ADDR   0088H.6 A   
+WAIT_ECHO. . . . .  C ADDR   009BH   A   
+WAIT_ECHO_END. . .  C ADDR   00A0H   A   
+WAIT_START . . . .  C ADDR   0049H   A   
+WAIT_T1. . . . . .  C ADDR   00E6H   A   
+Y_STEP_LOOP. . . .  C ADDR   0070H   A   
+
+
+REGISTER BANK(S) USED: 0 
+
+
+ASSEMBLY COMPLETE.  0 WARNING(S), 0 ERROR(S)
